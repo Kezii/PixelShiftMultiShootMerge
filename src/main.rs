@@ -41,17 +41,17 @@ fn read_exif(path: &str) -> HashMap<String, String> {
         .collect()
 }
 
-fn seq2idx(s: u32) -> u32 {
-    match s {
-        2 => 0,
-        1 => 1,
-        4 => 2,
-        3 => 3,
-        _ => unreachable!(),
+fn sequence_to_group_id(t: u32) -> (u32, u32) {
+    fn seq2idx(s: u32) -> u32 {
+        match s {
+            2 => 0,
+            1 => 1,
+            4 => 2,
+            3 => 3,
+            _ => unreachable!(),
+        }
     }
-}
 
-fn key(t: u32) -> (u32, u32) {
     let sn = t - 1;
     let s = 1 + (sn) % 4;
     let i = seq2idx(s);
@@ -76,7 +76,6 @@ struct RawImage {
     _path: String,
     width: u32,
     height: u32,
-    offset: u32,
     _sequence_number: u32,
     group: u32, // which group of 4 images this image belongs to, every group has 4 images
     id: u32,    // which image in the group this image is
@@ -107,13 +106,12 @@ impl RawImage {
         let file = std::fs::File::open(path).unwrap();
         let data = unsafe { MmapOptions::new().offset(offset as u64).map(&file).unwrap() };
 
-        let gi = key(sequence_number);
+        let gi = sequence_to_group_id(sequence_number);
 
         Self {
             _path: path.to_string(),
             width,
             height,
-            offset,
             _sequence_number: sequence_number,
             group: gi.0,
             id: gi.1,
@@ -227,22 +225,18 @@ fn main() {
         let mut imgbuf = image::ImageBuffer::new(files[0].width * 2, files[0].height * 2);
 
         info!("merging 16");
-        for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-            match (x % 2, y % 2) {
-                (0, 0) => {
-                    *pixel = *groups[0].get_pixel(x / 2, y / 2);
-                }
-                (1, 0) => {
-                    *pixel = *groups[1].get_pixel(x / 2, y / 2);
-                }
-                (0, 1) => {
-                    *pixel = *groups[2].get_pixel(x / 2, y / 2);
-                }
-                (1, 1) => {
-                    *pixel = *groups[3].get_pixel(x / 2, y / 2);
-                }
-                _ => unreachable!(),
-            };
+
+        // +----+----+
+        // | 0  | 1  |
+        // +----+----+
+        // | 2  | 3  |
+        // +----+----+
+
+        for (x, y, pixel) in groups[0].enumerate_pixels() {
+            imgbuf.put_pixel(x * 2, y * 2, *pixel);
+            imgbuf.put_pixel(x * 2 + 1, y * 2, *groups[1].get_pixel(x, y));
+            imgbuf.put_pixel(x * 2, y * 2 + 1, *groups[2].get_pixel(x, y));
+            imgbuf.put_pixel(x * 2 + 1, y * 2 + 1, *groups[3].get_pixel(x, y));
         }
 
         info!("saving");
