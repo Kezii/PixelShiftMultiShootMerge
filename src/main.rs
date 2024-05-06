@@ -28,21 +28,17 @@ fn read_exif(path: &str) -> HashMap<String, String> {
         .output()
         .expect("failed to execute process");
 
-    fn parse_exiftool_output(output: &str) -> HashMap<String, String> {
-        output
-            .lines()
-            .map(|line| {
-                let mut parts = line.splitn(2, ':');
-                let key = parts.next().unwrap().trim().to_string();
-                let value = parts.next().unwrap().trim().to_string();
-                (key, value)
-            })
-            .collect()
-    }
-
     let exifs = String::from_utf8_lossy(&exifs.stdout);
 
-    parse_exiftool_output(&exifs)
+    exifs
+        .lines()
+        .map(|line| {
+            let mut parts = line.splitn(2, ':');
+            let key = parts.next().unwrap().trim().to_string();
+            let value = parts.next().unwrap().trim().to_string();
+            (key, value)
+        })
+        .collect()
 }
 
 fn seq2idx(s: u32) -> u32 {
@@ -109,7 +105,7 @@ impl RawImage {
             .unwrap();
 
         let file = std::fs::File::open(path).unwrap();
-        let data = unsafe { MmapOptions::new().map(&file).unwrap() };
+        let data = unsafe { MmapOptions::new().offset(offset as u64).map(&file).unwrap() };
 
         let gi = key(sequence_number);
 
@@ -126,7 +122,7 @@ impl RawImage {
     }
 
     fn pixel(&self, x: u32, y: u32) -> u16 {
-        let offset = (y * self.width * 2 + x * 2) as usize + self.offset as usize;
+        let offset = (y * self.width * 2 + x * 2) as usize;
         let px_low = *self.data.get(offset).unwrap_or(&0);
         let px_hig = *self.data.get(offset + 1).unwrap_or(&0);
 
@@ -144,7 +140,6 @@ impl RawImage {
     }
 
     fn offsets(&self) -> (u32, u32) {
-
         match self.id {
             0 => (1, 1),
             1 => (0, 1),
@@ -172,9 +167,9 @@ fn merge_4(files: &[RawImage]) -> ImageBuffer<image::Rgb<u16>, Vec<u16>> {
             let color = file.color_offset(x, y);
 
             match color {
-                Color::Red => px.0[0] += (val) as u16 * 2,
+                Color::Red => px.0[0] += (val) as u16,
                 Color::Green => px.0[1] += (val) as u16,
-                Color::Blue => px.0[2] += (val) as u16 * 2,
+                Color::Blue => px.0[2] += (val) as u16,
             }
         }
 
