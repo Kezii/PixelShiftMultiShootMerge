@@ -1,6 +1,6 @@
 # Pixel Shift Multi Shoot
 
-Rust tool to merge sony's Pixel Shift Multi Shoot raw files into a single image 
+Rust tool to merge sony's Pixel Shift Multi Shoot raw files into a single debayered / rgb image 
 
 ## usage
 
