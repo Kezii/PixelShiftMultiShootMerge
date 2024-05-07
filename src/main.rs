@@ -1,9 +1,10 @@
 use clap::Parser;
-use image::ImageBuffer;
+use exif::read_exif;
 use log::info;
 use memmap::{Mmap, MmapOptions};
 use rayon::prelude::*;
-use std::{collections::HashMap, hash::Hash, process::Command};
+
+mod exif;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -15,30 +16,11 @@ struct Args {
     input_files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Color {
     Red,
     Green,
     Blue,
-}
-
-fn read_exif(path: &str) -> HashMap<String, String> {
-    let exifs = Command::new("exiftool")
-        .arg(path)
-        .output()
-        .expect("failed to execute process");
-
-    let exifs = String::from_utf8_lossy(&exifs.stdout);
-
-    exifs
-        .lines()
-        .map(|line| {
-            let mut parts = line.splitn(2, ':');
-            let key = parts.next().unwrap().trim().to_string();
-            let value = parts.next().unwrap().trim().to_string();
-            (key, value)
-        })
-        .collect()
 }
 
 fn sequence_to_group_id(t: u32) -> (u32, u32) {
@@ -84,35 +66,23 @@ struct RawImage {
 
 impl RawImage {
     fn new(path: &str) -> Self {
-        let exif_map = read_exif(path);
-
-        let offset = exif_map
-            .get("Strip Offsets")
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
-        let width = exif_map.get("Image Width").unwrap().parse::<u32>().unwrap();
-        let height = exif_map
-            .get("Image Height")
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
-        let sequence_number = exif_map
-            .get("Sequence Number")
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
+        let exif = read_exif(path);
 
         let file = std::fs::File::open(path).unwrap();
-        let data = unsafe { MmapOptions::new().offset(offset as u64).map(&file).unwrap() };
+        let data = unsafe {
+            MmapOptions::new()
+                .offset(exif.offset as u64)
+                .map(&file)
+                .unwrap()
+        };
 
-        let gi = sequence_to_group_id(sequence_number);
+        let gi = sequence_to_group_id(exif.sequence_number);
 
         Self {
             _path: path.to_string(),
-            width,
-            height,
-            _sequence_number: sequence_number,
+            width: exif.width,
+            height: exif.height,
+            _sequence_number: exif.sequence_number,
             group: gi.0,
             id: gi.1,
             data,
