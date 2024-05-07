@@ -148,12 +148,6 @@ impl RawImage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum MergeMode {
-    Mode4,
-    Mode16,
-}
-
 fn merge_4(files: &[RawImage], x: u32, y: u32) -> image::Rgb<u16> {
     let mut px = image::Rgb([0u16, 0, 0]);
 
@@ -193,56 +187,58 @@ fn main() {
         info!("{:?}", file);
     }
 
-    let mode = match files.len() {
-        4 => MergeMode::Mode4,
-        16 => MergeMode::Mode16,
+    if files
+        .iter()
+        .enumerate()
+        .any(|(i, file)| file.id + file.group * 4 != i as u32)
+    {
+        panic!("some files are missing");
+    }
+
+    let imgbuf = match files.len() {
+        4 => {
+            info!("creating buffer");
+            let mut imgbuf = image::ImageBuffer::new(files[0].width, files[0].height);
+
+            info!("merging 4");
+            imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
+                *pixel = merge_4(&files[..4], x, y);
+            });
+
+            imgbuf
+        }
+        16 => {
+            let groups = files.chunks(4).collect::<Vec<&[RawImage]>>();
+
+            info!("creating buffer");
+            let mut imgbuf = image::ImageBuffer::new(files[0].width * 2, files[0].height * 2);
+
+            info!("merging 16");
+
+            imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
+                // 16 images mode works by doing the 4-way bayer merge 4 times but shifted by half a pixel in a 2x2 grid
+                // the 2x2 grid is for each pixel, so the resulting image is quadrupled in size
+                // +----+----+
+                // | 0  | 1  |
+                // +----+----+
+                // | 2  | 3  |
+                // +----+----+
+                match (x % 2, y % 2) {
+                    (0, 0) => *pixel = merge_4(groups[0], x / 2, y / 2),
+                    (1, 0) => *pixel = merge_4(groups[1], x / 2, y / 2),
+                    (0, 1) => *pixel = merge_4(groups[2], x / 2, y / 2),
+                    (1, 1) => *pixel = merge_4(groups[3], x / 2, y / 2),
+                    _ => unreachable!(),
+                }
+            });
+
+            imgbuf
+        }
         _ => panic!("unsupported number of files"),
     };
 
-    info!("{:?}", mode);
-
-    if mode == MergeMode::Mode4 {
-        info!("creating buffer");
-        let mut imgbuf = image::ImageBuffer::new(files[0].width, files[0].height);
-
-        info!("merging 4");
-        imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
-            *pixel = merge_4(&files[..4], x, y);
-        });
-
-        info!("saving");
-        imgbuf.save(&args.output_file).unwrap();
-    }
-
-    if mode == MergeMode::Mode16 {
-        let groups = files.chunks(4).collect::<Vec<&[RawImage]>>();
-
-        info!("creating buffer");
-        let mut imgbuf = image::ImageBuffer::new(files[0].width * 2, files[0].height * 2);
-
-        info!("merging 16");
-
-        imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
-            // 16 images mode works by doing the 4-way bayer merge 4 times but shifted by half a pixel in a 2x2 grid
-            // the 2x2 grid is for each pixel, so the resulting image is quadrupled in size
-            // +----+----+
-            // | 0  | 1  |
-            // +----+----+
-            // | 2  | 3  |
-            // +----+----+
-            match (x % 2, y % 2) {
-                (0, 0) => *pixel = merge_4(groups[0], x / 2, y / 2),
-                (1, 0) => *pixel = merge_4(groups[1], x / 2, y / 2),
-                (0, 1) => *pixel = merge_4(groups[2], x / 2, y / 2),
-                (1, 1) => *pixel = merge_4(groups[3], x / 2, y / 2),
-                _ => unreachable!(),
-            }
-        });
-
-        info!("saving");
-
-        imgbuf.save(&args.output_file).unwrap();
-    }
+    info!("saving");
+    imgbuf.save(&args.output_file).unwrap();
 
     info!("done in {:?}", now.elapsed());
 }
