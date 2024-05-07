@@ -26,23 +26,27 @@ enum Color {
 fn sequence_to_group_id(t: u32) -> (u32, u32) {
     fn seq2idx(s: u32) -> u32 {
         match s {
-            2 => 0,
-            1 => 1,
-            4 => 2,
-            3 => 3,
+            1 => 0,
+            0 => 1,
+            3 => 2,
+            2 => 3,
             _ => unreachable!(),
         }
     }
 
     let sn = t - 1;
-    let s = 1 + (sn) % 4;
-    let i = seq2idx(s);
-    let g = seq2idx(1 + sn / 4);
-    (g, i)
+    let id = seq2idx(sn % 4);
+    let group_id = seq2idx(sn / 4);
+    (group_id, id)
 }
 
-fn dngcolor(row: u32, col: u32) -> Color {
-    let v = 0x94949494u32 >> ((((row) << 1 & 14) + ((col) & 1)) << 1) & 3;
+/// R G R G
+/// G B G B
+/// R G R G
+/// G B G B
+fn bayer_pattern(x: u32, y: u32) -> Color {
+    // what the fuck?
+    let v = 0x94949494u32 >> ((((x) << 1 & 14) + ((y) & 1)) << 1) & 3;
 
     match v {
         0 => Color::Red,
@@ -60,7 +64,7 @@ struct RawImage {
     height: u32,
     _sequence_number: u32,
     group: u32, // which group of 4 images this image belongs to, every group has 4 images
-    id: u32,    // which image in the group this image is
+    id_in_group: u32, // which image in the group this image is
     data: Mmap,
 }
 
@@ -84,12 +88,12 @@ impl RawImage {
             height: exif.height,
             _sequence_number: exif.sequence_number,
             group: gi.0,
-            id: gi.1,
+            id_in_group: gi.1,
             data,
         }
     }
 
-    fn pixel(&self, x: u32, y: u32) -> u16 {
+    fn get_pixel(&self, x: u32, y: u32) -> u16 {
         let offset = (y * self.width * 2 + x * 2) as usize;
         let px_low = *self.data.get(offset).unwrap_or(&0);
         let px_hig = *self.data.get(offset + 1).unwrap_or(&0);
@@ -97,18 +101,8 @@ impl RawImage {
         u16::from_le_bytes([px_low, px_hig])
     }
 
-    fn pixel_offset(&self, x: u32, y: u32) -> u16 {
-        let (r_off, c_off) = self.offsets();
-        self.pixel(x - c_off, y - r_off)
-    }
-
-    fn color_offset(&self, x: u32, y: u32) -> Color {
-        let (r_off, c_off) = self.offsets();
-        dngcolor(y - r_off, x - c_off)
-    }
-
-    fn offsets(&self) -> (u32, u32) {
-        match self.id {
+    fn inter_group_offsets(&self) -> (u32, u32) {
+        match self.id_in_group {
             0 => (1, 1),
             1 => (0, 1),
             2 => (0, 0),
@@ -122,8 +116,10 @@ fn merge_4(files: &[RawImage], x: u32, y: u32) -> image::Rgb<u16> {
     let mut px = image::Rgb([0u16, 0, 0]);
 
     for file in files {
-        let val = file.pixel_offset(x, y) as u32;
-        let color = file.color_offset(x, y);
+        let offset = file.inter_group_offsets();
+
+        let val = file.get_pixel(x - offset.1, y - offset.0) as u32;
+        let color = bayer_pattern(x - offset.1, y - offset.0);
 
         match color {
             Color::Red => px.0[0] += (val) as u16,
@@ -151,7 +147,7 @@ fn main() {
         .map(|path| RawImage::new(path))
         .collect::<Vec<_>>();
 
-    files.sort_by_key(|file| (file.group, file.id));
+    files.sort_by_key(|file| (file.group, file.id_in_group));
 
     for file in &files {
         info!("{:?}", file);
@@ -160,7 +156,7 @@ fn main() {
     if files
         .iter()
         .enumerate()
-        .any(|(i, file)| file.id + file.group * 4 != i as u32)
+        .any(|(i, file)| file.id_in_group + file.group * 4 != i as u32)
     {
         panic!("some files are missing");
     }
