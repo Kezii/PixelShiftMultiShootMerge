@@ -153,28 +153,22 @@ enum MergeMode {
     Mode4,
     Mode16,
 }
-fn merge_4(files: &[RawImage]) -> ImageBuffer<image::Rgb<u16>, Vec<u16>> {
-    info!("merging 4");
-    let mut imgbuf = image::ImageBuffer::new(files[0].width, files[0].height);
 
-    for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-        let mut px = image::Rgb([0u16, 0, 0]);
+fn merge_4(files: &[RawImage], x: u32, y: u32) -> image::Rgb<u16> {
+    let mut px = image::Rgb([0u16, 0, 0]);
 
-        for file in files {
-            let val = file.pixel_offset(x, y) as u32;
-            let color = file.color_offset(x, y);
+    for file in files {
+        let val = file.pixel_offset(x, y) as u32;
+        let color = file.color_offset(x, y);
 
-            match color {
-                Color::Red => px.0[0] += (val) as u16,
-                Color::Green => px.0[1] += (val) as u16,
-                Color::Blue => px.0[2] += (val) as u16,
-            }
+        match color {
+            Color::Red => px.0[0] += (val) as u16,
+            Color::Green => px.0[1] += (val) as u16,
+            Color::Blue => px.0[2] += (val) as u16,
         }
-
-        *pixel = px;
     }
 
-    imgbuf
+    px
 }
 
 fn main() {
@@ -205,39 +199,45 @@ fn main() {
         _ => panic!("unsupported number of files"),
     };
 
-    println!("{:?}", mode);
+    info!("{:?}", mode);
 
     if mode == MergeMode::Mode4 {
-        let imgbuf = merge_4(&files[..4]);
+        info!("creating buffer");
+        let mut imgbuf = image::ImageBuffer::new(files[0].width, files[0].height);
 
+        info!("merging 4");
+        imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
+            *pixel = merge_4(&files[..4], x, y);
+        });
+
+        info!("saving");
         imgbuf.save(&args.output_file).unwrap();
     }
 
     if mode == MergeMode::Mode16 {
         let groups = files.chunks(4).collect::<Vec<&[RawImage]>>();
 
-        let groups = groups
-            .par_iter()
-            .map(|g| merge_4(g))
-            .collect::<Vec<ImageBuffer<image::Rgb<u16>, Vec<u16>>>>();
-
         info!("creating buffer");
         let mut imgbuf = image::ImageBuffer::new(files[0].width * 2, files[0].height * 2);
 
         info!("merging 16");
 
-        // +----+----+
-        // | 0  | 1  |
-        // +----+----+
-        // | 2  | 3  |
-        // +----+----+
-
-        for (x, y, pixel) in groups[0].enumerate_pixels() {
-            imgbuf.put_pixel(x * 2, y * 2, *pixel);
-            imgbuf.put_pixel(x * 2 + 1, y * 2, *groups[1].get_pixel(x, y));
-            imgbuf.put_pixel(x * 2, y * 2 + 1, *groups[2].get_pixel(x, y));
-            imgbuf.put_pixel(x * 2 + 1, y * 2 + 1, *groups[3].get_pixel(x, y));
-        }
+        imgbuf.par_enumerate_pixels_mut().for_each(|(x, y, pixel)| {
+            // 16 images mode works by doing the 4-way bayer merge 4 times but shifted by half a pixel in a 2x2 grid
+            // the 2x2 grid is for each pixel, so the resulting image is quadrupled in size
+            // +----+----+
+            // | 0  | 1  |
+            // +----+----+
+            // | 2  | 3  |
+            // +----+----+
+            match (x % 2, y % 2) {
+                (0, 0) => *pixel = merge_4(groups[0], x / 2, y / 2),
+                (1, 0) => *pixel = merge_4(groups[1], x / 2, y / 2),
+                (0, 1) => *pixel = merge_4(groups[2], x / 2, y / 2),
+                (1, 1) => *pixel = merge_4(groups[3], x / 2, y / 2),
+                _ => unreachable!(),
+            }
+        });
 
         info!("saving");
 
