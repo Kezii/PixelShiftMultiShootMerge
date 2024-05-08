@@ -58,17 +58,18 @@ fn bayer_pattern(x: u32, y: u32) -> Color {
 }
 
 #[derive(Debug)]
-struct RawImage {
+struct RawImage<'a> {
     _path: String,
     width: u32,
     height: u32,
     _sequence_number: u32,
     group: u32, // which group of 4 images this image belongs to, every group has 4 images
     id_in_group: u32, // which image in the group this image is
-    data: Mmap,
+    _mmap: Mmap,
+    data_pixels: &'a [u16],
 }
 
-impl RawImage {
+impl<'a> RawImage<'a> {
     fn new(path: &str) -> Self {
         let exif = read_exif(path);
 
@@ -80,6 +81,9 @@ impl RawImage {
                 .unwrap()
         };
 
+        let data_slice_u16 =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u16, data.len() / 2) };
+
         let gi = sequence_to_group_id(exif.sequence_number);
 
         Self {
@@ -89,16 +93,19 @@ impl RawImage {
             _sequence_number: exif.sequence_number,
             group: gi.0,
             id_in_group: gi.1,
-            data,
+            _mmap: data,
+            data_pixels: data_slice_u16,
         }
     }
 
     fn get_pixel(&self, x: u32, y: u32) -> u16 {
-        let offset = (y * self.width * 2 + x * 2) as usize;
-        let px_low = *self.data.get(offset).unwrap_or(&0);
-        let px_hig = *self.data.get(offset + 1).unwrap_or(&0);
+        let offset = (y * self.width + x) as usize;
 
-        u16::from_le_bytes([px_low, px_hig])
+        if offset >= self.data_pixels.len() {
+            return 0;
+        }
+
+        self.data_pixels[offset]
     }
 
     fn inter_group_offsets(&self) -> (u32, u32) {
@@ -150,7 +157,15 @@ fn main() {
     files.sort_by_key(|file| (file.group, file.id_in_group));
 
     for file in &files {
-        info!("{:?}", file);
+        info!(
+            "{}: {}x{} ({}mpx), group {}, id {}",
+            file._path,
+            file.width,
+            file.height,
+            file.data_pixels.len() / 1000 / 1000,
+            file.group,
+            file.id_in_group
+        );
     }
 
     if files

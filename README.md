@@ -16,4 +16,4 @@ cargo run --release -- -o /tmp/test.tiff -i ../images/*.ARW
 
 ## credits
 
-based on https://github.com/agriggio/make_arq
+inspired by https://github.com/agriggio/make_arq
